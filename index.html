@@ -1,0 +1,60 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rubik's Cube Race</title>
+<style>
+:root{--bg:#14202b;--card:#1c2b39;--line:#2f4457;--tx:#eef2f5;--mu:#93a7b8;--ok:#5fd39a;--bad:#ff7a70;--ac:#ffc857}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 "Segoe UI",system-ui,sans-serif;padding:64px 20px 40px}
+#id{position:fixed;top:0;left:0;right:0;z-index:9;background:#0b131a;border-bottom:3px solid var(--ac);padding:10px 20px;font-weight:700;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{margin:6px 0 14px;font-size:26px}.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+select,input,button{font:inherit;padding:8px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--tx)}
+button{background:var(--ac);color:#1a1a1a;font-weight:700;cursor:pointer;border:0}button:disabled{opacity:.5}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #fff}
+#grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px}
+.card{background:var(--card);border:2px solid var(--line);border-radius:10px;padding:14px;display:grid;grid-template-columns:auto 1fr;gap:14px}
+.card.solved{border-color:var(--ok)}.card.unsolved{border-color:var(--bad)}
+.card h2{grid-column:1/-1;margin:0;font-size:18px;display:flex;justify-content:space-between}.tag{font-size:12px;color:var(--mu);border:1px solid var(--line);border-radius:4px;padding:2px 6px}
+.net{display:grid;grid-template-columns:repeat(12,16px);gap:2px}.net i{width:16px;height:16px;border-radius:2px;display:block}
+.num{font-variant-numeric:tabular-nums;font-size:22px;font-weight:700}.mu{color:var(--mu);font-size:12px}
+.hist{grid-column:1/-1;font-family:Consolas,monospace;color:var(--mu);min-height:20px;word-break:break-word}
+.badge{font-weight:700}.solved .badge{color:var(--ok)}.unsolved .badge{color:var(--bad)}
+table{border-collapse:collapse;width:100%;margin-top:10px}th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums}th:first-child,td:first-child{text-align:left}th{color:var(--mu);font-weight:600}
+section{margin-top:28px}
+</style></head><body>
+<div id="id"><span id="nm"></span><span id="rl"></span></div>
+<h1>Rubik's Cube Race</h1>
+<div class="bar">
+ <select id="mode"><option value="mock">Mock (no API)</option><option value="ollama">Ollama (local)</option><option value="openrouter">OpenRouter (real, limited)</option></select>
+ <label>Seed <input id="seed" type="number" value="1" style="width:80px"></label>
+ <button id="go">Run benchmark</button><span class="mu" id="bud"></span><span id="msg" class="badge"></span>
+</div>
+<div class="mu" id="start"></div>
+<div id="grid"></div>
+<section><h1>Statistical benchmark</h1><div class="mu">Latency is live API time only; cached replies are shown separately. Gap = moves &minus; 3 (exact BFS optimum), solved runs only.</div><div id="stats"></div></section>
+<script>
+const COL={U:'#f5f5f5',R:'#d62f2f',F:'#2fa84f',D:'#f4d12b',L:'#f08a24',B:'#2f6fe0'},OFF={U:[0,3],R:[3,6],F:[3,3],D:[6,3],L:[3,0],B:[3,9]};
+const $=id=>document.getElementById(id),f=(x,d=2)=>x==null?'–':x.toFixed(d),avg=a=>a.length?a.reduce((p,c)=>p+c,0)/a.length:null;
+const clock=s=>`${Math.floor(s/60)}:${(s%60).toFixed(2).padStart(5,'0')}`;
+function net(s){const g=Array(108).fill(null);'URFDLB'.split('').forEach((c,k)=>{const[r,o]=OFF[c];for(let i=0;i<9;i++)g[(r+Math.floor(i/3))*12+o+i%3]=s[k*9+i]});
+ return `<div class="net">${g.map(x=>`<i style="${x?'background:'+COL[x]:'visibility:hidden'}"></i>`).join('')}</div>`}
+function card(m){const t=m.t0?(m.end||Date.now()/1000)-m.t0:0,last=m.moves.at(-1)||'–',st=m.status;
+ const lab=st=='solved'?'SOLVED ✓':st=='unsolved'?'NOT SOLVED – '+m.reason:st=='thinking'?'deciding…':'waiting';
+ return `<div class="card ${st}"><h2>${m.label}<span class="tag">${m.kind=='llm'?'Frontier LLM':'Decision model'}</span></h2>${net(m.state)}
+ <div><div class="mu">time</div><div class="num">${clock(t)}</div><div class="mu">moves (steps)</div><div class="num">${m.moves.length} (${m.steps})</div>
+ <div class="mu">current move</div><div class="num">${last}</div><div class="badge">${lab}</div>
+ <div class="mu">avg live latency ${f(avg(m.lat_live),3)}s · calls ${m.calls} · cache hits ${m.hits} · invalid ${m.invalid} · $${m.cost.toFixed(5)}</div></div>
+ <div class="hist">${m.moves.join(' ')||'no moves yet'}</div></div>`}
+async function stats(mode){const r=await(await fetch('/api/stats?mode='+mode)).json();
+ $('stats').innerHTML=r.length?`<table><tr><th>Model</th><th>Runs</th><th>Success %</th><th>Avg latency / move (s)</th><th>Avg cached (s)</th><th>Avg total time (s)</th><th>Avg moves</th><th>Optimal gap</th><th>API calls</th><th>Cache hits</th><th>Invalid</th><th>Cost ($)</th></tr>`+
+ r.map(x=>`<tr><td>${x.label}</td><td>${x.runs}</td><td>${f(x.success,0)}</td><td>${f(x.lat_live,3)}</td><td>${f(x.lat_cached,4)}</td><td>${f(x.total_time)}</td><td>${f(x.moves,1)}</td><td>${f(x.gap,1)}</td><td>${x.calls}</td><td>${x.hits}</td><td>${x.invalid}</td><td>${x.cost.toFixed(5)}</td></tr>`).join('')+'</table>':'<p class="mu">No finished runs for this mode yet.</p>'}
+async function budget(){const b=await(await fetch('/api/budget')).json();$('bud').textContent=`OpenRouter calls used: ${b.calls.total||0}/${b.total_cap} (opus ${b.calls.opus||0}/5)`}
+let last='idle';
+async function poll(){const s=await(await fetch('/api/state')).json();
+ if(s.models&&Object.keys(s.models).length){$('grid').innerHTML=Object.values(s.models).map(card).join('');$('start').textContent=`Start state (exactly 3 moves from solved): ${s.start}`}
+ $('go').disabled=s.status=='running';
+ if(last=='running'&&s.status=='done'){stats(s.mode);budget()}last=s.status}
+$('go').onclick=async()=>{const mode=$('mode').value;
+ if(mode=='openrouter'&&!confirm('This makes REAL, limited OpenRouter calls (max 65, Opus max 5). Continue?'))return;
+ const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode,seed:+$('seed').value})});
+ $('msg').textContent=r.ok?'':(await r.json()).detail};
+$('mode').onchange=()=>stats($('mode').value);
+(async()=>{const c=await(await fetch('/api/config')).json();$('nm').textContent='Name: '+c.name;$('rl').textContent='Roll No: '+c.roll;
+ budget();stats('mock');poll();setInterval(poll,300)})();
+</script></body></html>
